@@ -1,0 +1,643 @@
+############## Single-cell/single-nucleus RNA-seq data analysis for Cell Metabolism Paper, Author: Russta Fayyazi (McMaster University) ##############
+### the reference website: https://satijalab.org/seurat/articles/get_started_v5_new ###
+
+#single-cell/nucleus RNA-seq figures in manuscript = 5A, 5B, 5C, 5D, 5G, 5H, 6B, 6C
+
+
+library(Seurat)
+library(Matrix)
+library(data.table)
+library(R.utils)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+
+
+#SECTION 1. CREATING SEURAT OBJECTS__________________________________________________________________________________________________
+#____________________________________________________________________________________________________________________________________________________
+
+#Mouse data: FAT MASH model________________________________________________________________________________
+#load the CCl4_T and CCl4_V samples
+CCl4_T_1.data <- Read10X_h5("Feature:Barcode Matrix (sample aka filtered)/CCl4_T_1_sample.h5")
+CCl4_T_4.data <- Read10X_h5("Feature:Barcode Matrix (sample aka filtered)/CCl4_T_4_sample.h5")
+CCl4_T_83.data <- Read10X_h5("Feature:Barcode Matrix (sample aka filtered)/CCl4_T_83_sample.h5")
+CCl4_V_45.data <- Read10X_h5("Feature:Barcode Matrix (sample)/CCl4_V_45_sample.h5")
+CCl4_V_66.data <- Read10X_h5("Feature:Barcode Matrix (sample)/CCl4_V_66_sample.h5")
+CCl4_V_67.data <- Read10X_h5("Feature:Barcode Matrix (sample)/CCl4_V_67_sample.h5")
+
+#create seurat objects
+CCl4_T_1 <- CreateSeuratObject(counts = CCl4_T_1.data, project = "CCl4_T_1")
+CCl4_T_4 <- CreateSeuratObject(counts = CCl4_T_4.data, project = "CCl4_T_4")
+CCl4_T_83 <- CreateSeuratObject(counts = CCl4_T_83.data, project = "CCl4_T_83")
+CCl4_V_45 <- CreateSeuratObject(counts = CCl4_V_45.data, project = "CCl4_V_45")
+CCl4_V_66 <- CreateSeuratObject(counts = CCl4_V_66.data, project = "CCl4_V_66")
+CCl4_V_67 <- CreateSeuratObject(counts = CCl4_V_67.data, project = "CCl4_V_67")
+
+# Preprocess data
+CCl4_T_1 <- NormalizeData(CCl4_T_1)
+CCl4_T_1 <- FindVariableFeatures(CCl4_T_1)
+CCl4_T_4 <- NormalizeData(CCl4_T_4)
+CCl4_T_4 <- FindVariableFeatures(CCl4_T_4)
+CCl4_T_83 <- NormalizeData(CCl4_T_83)
+CCl4_T_83 <- FindVariableFeatures(CCl4_T_83)
+CCl4_V_45 <- NormalizeData(CCl4_V_45)
+CCl4_V_45 <- FindVariableFeatures(CCl4_V_45)
+CCl4_V_66 <- NormalizeData(CCl4_V_66)
+CCl4_V_66 <- FindVariableFeatures(CCl4_V_66)
+CCl4_V_67 <- NormalizeData(CCl4_V_67)
+CCl4_V_67 <- FindVariableFeatures(CCl4_V_67)
+# find integration anchors
+CCl4_Group_noC_samples_list <- list(CCl4_T_1,CCl4_T_4,CCl4_T_83,CCl4_V_45,CCl4_V_66,CCl4_V_67)
+#remove all objects but sample list
+ls()
+rm("plot_gene_expression")
+anchors_CCl4_Group_noC <- FindIntegrationAnchors(object.list = CCl4_Group_noC_samples_list, dims = 1:25)
+#save integration anchors so they don't have to be recomputed (took 30min)
+save(anchors_CCl4_Group_noC, file = "anchors_CCl4_Group_noC_25dims.RData")
+
+#export to terminal to run integration step
+#export R_MAX_VSIZE=32GB
+#R
+#Sys.getenv("R_MAX_VSIZE") (should return 32GB)
+#library(Seurat)
+#library(Matrix)
+#load("anchors_CCl4_Group_noC_25dims.RData")
+#integrated_CCl4_noC <- IntegrateData(anchorset = anchors_CCl4_Group_noC, dims = 1:25)
+#save_path <- "integrated_CCl4_noC.RData"
+#save(integrated_CCl4_noC, file = save_path)
+
+#load integrated object
+load("integrated_CCl4_noC.RData")
+# Scale the integrated data
+integrated_CCl4_noC <- ScaleData(integrated_CCl4_noC)
+integrated_CCl4_noC <- RunPCA(integrated_CCl4_noC)
+
+
+#Human data: from Filliol et al. 2022, retrieved from repository GSE174748__________________________________
+#NAFLD liver condition from Filliol paper (n=2), data downloaded per patient, so needs to be combined into single object
+#nafld sample 1
+features_nafld1 <- fread("Filliol_nafld1_features.tsv.gz", header = FALSE)
+barcodes_nafld1 <- fread("Filliol_nafld1_barcodes.tsv.gz", header = FALSE)
+counts_nafld1 <- readMM("Filliol_nafld1_matrix.mtx.gz")
+dimnames(counts_nafld1) <- list(as.character(features_nafld1$V1), as.character(barcodes_nafld1$V1))
+counts_nafld1 <- as(counts_nafld1, "CsparseMatrix")
+# Create a gene-cell matrix
+Filliol_nafld1 <- CreateSeuratObject(counts = counts_nafld1, project = "Filliol_nafld1")
+# Preprocess data
+Filliol_nafld1 <- subset(Filliol_nafld1, subset = nFeature_RNA > 150 & nFeature_RNA < 3000)
+Filliol_nafld1 <- NormalizeData(Filliol_nafld1)
+Filliol_nafld1 <- FindVariableFeatures(Filliol_nafld1)
+#nafld sample 2
+features_nafld2 <- fread("Filliol_nafld2_features.tsv.gz", header = FALSE)
+barcodes_nafld2 <- fread("Filliol_nafld2_barcodes.tsv.gz", header = FALSE)
+counts_nafld2 <- readMM("Filliol_nafld2_matrix.mtx.gz")
+dimnames(counts_nafld2) <- list(as.character(features_nafld2$V1), as.character(barcodes_nafld2$V1))
+counts_nafld2 <- as(counts_nafld2, "CsparseMatrix")
+# Create a gene-cell matrix
+Filliol_nafld2 <- CreateSeuratObject(counts = counts_nafld2, project = "Filliol_nafld2")
+# Preprocess data
+Filliol_nafld2 <- subset(Filliol_nafld2, subset = nFeature_RNA > 150 & nFeature_RNA < 3000)
+Filliol_nafld2 <- NormalizeData(Filliol_nafld2)
+Filliol_nafld2 <- FindVariableFeatures(Filliol_nafld2)
+# Integrate data to create single object for NAFLD liver
+list_of_datasets <- list(Filliol_nafld1, Filliol_nafld2)
+anchors <- FindIntegrationAnchors(object.list = list_of_datasets, dims = 1:25)
+integrated_data_nafld <- IntegrateData(anchorset = anchors, dims = 1:25)
+#save integrated object
+save(integrated_data_nafld, file = "Filliol_NAFLD_integrated_data.RData")
+
+#healthy liver condition from Filliol paper (n=2), data downloaded per patient, so needs to be combined into single object
+#Healthy sample 1
+features_healthy1 <- fread("Filliol_healthy1_features.tsv.gz", header = FALSE)
+barcodes_healthy1 <- fread("Filliol_healthy1_barcodes.tsv.gz", header = FALSE)
+counts_healthy1 <- readMM("Filliol_healthy1_matrix.mtx.gz")
+dimnames(counts_healthy1) <- list(as.character(features_healthy1$V1), as.character(barcodes_healthy1$V1))
+counts_healthy1 <- as(counts_healthy1, "CsparseMatrix")
+# Create a gene-cell matrix
+Filliol_healthy1 <- CreateSeuratObject(counts = counts_healthy1, project = "Filliol_Healthy1")
+# Preprocess data
+Filliol_healthy1 <- subset(Filliol_healthy1, subset = nFeature_RNA > 150 & nFeature_RNA < 3000)
+Filliol_healthy1 <- NormalizeData(Filliol_healthy1)
+Filliol_healthy1 <- FindVariableFeatures(Filliol_healthy1)
+#Healthy sample 2
+features_healthy2 <- fread("Filliol_healthy2_features.tsv.gz", header = FALSE)
+barcodes_healthy2 <- fread("Filliol_healthy2_barcodes.tsv.gz", header = FALSE)
+counts_healthy2 <- readMM("Filliol_healthy2_matrix.mtx.gz")
+dimnames(counts_healthy2) <- list(as.character(features_healthy2$V1), as.character(barcodes_healthy2$V1))
+counts_healthy2 <- as(counts_healthy2, "CsparseMatrix")
+# Create a gene-cell matrix
+Filliol_healthy2 <- CreateSeuratObject(counts = counts_healthy2, project = "Filliol_Healthy2")
+# Preprocess data
+Filliol_healthy2 <- subset(Filliol_healthy2, subset = nFeature_RNA > 150 & nFeature_RNA < 3000)
+Filliol_healthy2 <- NormalizeData(Filliol_healthy2)
+Filliol_healthy2 <- FindVariableFeatures(Filliol_healthy2)
+# Integrate data to create single object for Healthy liver
+list_of_datasets <- list(Filliol_healthy1, Filliol_healthy2)
+anchors <- FindIntegrationAnchors(object.list = list_of_datasets, dims = 1:25)
+integrated_data_healthy <- IntegrateData(anchorset = anchors, dims = 1:25)
+#save integrated object 
+save(integrated_data_healthy, file = "Filliol_healthyintegrated_data.RData")
+
+
+
+
+
+
+
+#SECTION 2. FIGURES 5A AND 5B - Clustering, manually annotating HSCs and hepatocytes in mouse data______
+#________________________________________________________________________________________________________
+# Find neighbors and clusters
+integrated_CCl4_noC <- FindNeighbors(integrated_CCl4_noC, dims = 1:25)
+integrated_CCl4_noC <- FindClusters(integrated_CCl4_noC, resolution = 1.0)
+integrated_CCl4_noC <- RunUMAP(integrated_CCl4_noC, dims = 1:25)
+DimPlot(integrated_CCl4_noC, reduction = "umap", label = TRUE, pt.size = 1)
+# Plot UMAP colored by group
+integrated_CCl4_noC$group <- ifelse(integrated_CCl4_noC$orig.ident %in% c("CCl4_T_1","CCl4_T_4","CCl4_T_83"), "CCl4_T", "CCl4_V")
+DimPlot(integrated_CCl4_noC, reduction = "umap", group.by = "group", label = FALSE, pt.size = 0.85) +
+  scale_color_manual(values = c("CCl4_T" = "blue", "CCl4_V" = "red")) +
+  labs(title = "UMAP of Integrated CCl4_T and CCl4_V Samples")
+
+DefaultAssay(integrated_CCl4_noC) <- "RNA"
+
+#Dcn
+FeaturePlot(integrated_CCl4_noC, features = c("Dcn"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Dcn Expression")
+#Hgf
+FeaturePlot(integrated_CCl4_noC, features = c("Hgf"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Hgf Expression")
+#Reln
+FeaturePlot(integrated_CCl4_noC, features = c("Reln"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Reln Expression")
+#Pdgfrb
+FeaturePlot(integrated_CCl4_noC, features = c("Pdgfrb"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Pdgfrb Expression")
+#Col3a1
+FeaturePlot(integrated_CCl4_noC, features = c("Col3a1"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Col3a1 Expression")
+#Alb
+FeaturePlot(integrated_CCl4_noC, features = c("Alb"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Alb Expression")
+#Hnf4a
+FeaturePlot(integrated_CCl4_noC, features = c("Hnf4a"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Hnf4a Expression")
+#Uox
+FeaturePlot(integrated_CCl4_noC, features = c("Uox"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Uox Expression")
+#Apoc3
+FeaturePlot(integrated_CCl4_noC, features = c("Apoc3"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("Apoc3 Expression")
+
+# Get the total number of cells in each condition
+total_cells <- table(integrated_CCl4_noC$group)
+# Hepatic stellate cells correspond to cluster 9
+stellate_cells <- table(integrated_CCl4_noC$group[integrated_CCl4_noC$seurat_clusters == 9])
+# Hepatocytes correspond to clusters 8,6,19,18,0,2,12,17,5,20,4,7,22
+hepatocyte_clusters <- c(8, 6, 19, 18, 0, 2, 12, 17, 5, 20, 4, 7, 22)
+hepatocyte_cells <- table(integrated_CCl4_noC$group[integrated_CCl4_noC$seurat_clusters %in% hepatocyte_clusters])
+
+
+#determine n values and run stats for figure 5A creation____________________
+# total cells per biol replicate
+total_by_replicate <- table(integrated_CCl4_noC$orig.ident)
+# HSC cells per biol replicate
+HSC_clusters <- c(9)
+HSC_by_replicate <- table(
+  integrated_CCl4_noC$orig.ident[integrated_CCl4_noC$seurat_clusters %in% HSC_clusters]
+)
+#statistical testing
+df <- data.frame(
+  Replicate   = c("CCl4_T_1","CCl4_T_4","CCl4_T_83",
+                  "CCl4_V_45","CCl4_V_66","CCl4_V_67"),
+  Condition   = c("Treated","Treated","Treated",
+                  "Vehicle","Vehicle","Vehicle"),
+  TotalCells  = c(5799, 5836, 5925,
+                  5846, 5836, 5925),
+  HSCs        = c(117, 191, 268,
+                  279, 230, 285)
+)
+# calculate proportions
+df$PropHSC <- df$HSCs / df$TotalCells
+df
+#Beta-binomial GLM (overdispersion model) 
+library(glmmTMB)
+fit_bb <- glmmTMB(cbind(HSCs, TotalCells - HSCs) ~ Condition,
+                  family = betabinomial(link="logit"), data = df)
+summary(fit_bb)
+
+#subset large object to cell types of interest for UMAP creation (figure 5B creation)____________________
+# Subset hepatocytes
+hepatocytes <- subset(integrated_CCl4_noC, cell_type == "Hepatocytes")
+DefaultAssay(hepatocytes) <- "RNA"
+dim(hepatocytes)
+# Normalize and scale hepatocytes
+hepatocytes <- NormalizeData(hepatocytes)
+hepatocytes <- ScaleData(hepatocytes)
+hepatocytes <- RunPCA(hepatocytes)
+# For hepatocytes
+hepatocytes <- FindNeighbors(hepatocytes, dims = 1:10)  
+hepatocytes <- FindClusters(hepatocytes, resolution = 0.5) 
+hepatocytes <- RunUMAP(hepatocytes, dims = 1:10)
+# Assign condition labels for plotting
+hepatocytes$condition_label <- ifelse(hepatocytes$group == "CCl4_V", "Vehicle", "EVT0185(100mg/kg)")
+# Plot UMAP for hepatocytes
+DimPlot(hepatocytes, reduction = "umap", group.by = "group", label = FALSE, pt.size = 0.35) +
+  ggtitle("") +
+  scale_color_manual(values = c("CCl4_T" = "#cc00cc", "CCl4_V" = "#6666ff"),labels = c("EVT0185 (100mg/kg)","Vehicle")) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme_classic(base_size = 14) +
+  theme(axis.title.x = element_text(size = 20),
+        axis.text.x = element_text(size = 16),
+        axis.title.y = element_text(size = 20),
+        axis.text.y = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) + 
+  guides(color = 
+           guide_legend(override.aes = list(size = 4),
+                        reverse = TRUE)) +
+  scale_y_continuous(limits = c(-6.5,6.5), breaks = c(-5,-2.5,-0,2.5,5)) +
+  scale_x_continuous(limits = c(-10,10))
+
+# Subset hepatic stellate cells
+stellate_cells <- subset(integrated_CCl4_noC, cell_type == "Hepatic Stellate Cells")
+DefaultAssay(stellate_cells) <- "RNA"
+dim(stellate_cells)
+# Normalize and scale hepatic stellate cells
+stellate_cells <- NormalizeData(stellate_cells)
+stellate_cells <- ScaleData(stellate_cells)
+stellate_cells <- RunPCA(stellate_cells)
+# For HSCs
+stellate_cells <- FindNeighbors(stellate_cells, dims = 1:10)  
+stellate_cells <- FindClusters(stellate_cells, resolution = 0.5)  
+stellate_cells <- RunUMAP(stellate_cells, dims = 1:10)
+# Plot UMAP for HSCs
+DimPlot(stellate_cells, reduction = "umap", group.by = "group", label = FALSE, pt.size = 0.35) +
+  ggtitle("") +
+  scale_color_manual(values = c("CCl4_T" = "#cc00cc", "CCl4_V" = "#6666ff"),labels = c("EVT0185 (100mg/kg)","Vehicle")) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme_classic(base_size = 14) +
+  theme(axis.title.x = element_text(size = 20),
+        axis.text.x = element_text(size = 16),
+        axis.title.y = element_text(size = 20),
+        axis.text.y = element_text(size = 16),
+        legend.text = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) + 
+  guides(color = 
+           guide_legend(override.aes = list(size = 4),
+                        reverse = TRUE)) +
+  scale_y_continuous(limits = c(-6,6)) +
+  scale_x_continuous(limits = c(-7.5,7.5))
+
+
+
+
+
+
+
+#SECTION 3. FIGURES 5C 5D 5G and 5H - gene expression inquiry in hepatocytes and aHSCs______
+#________________________________________________________________________________________________________
+
+# Identify aHSC cells by expression of Acta2
+HSCs <- subset(integrated_CCl4_noC, subset = Acta2 > 0)
+dim(HSCs) #138 aHSCs in this dataset
+HSCs <- JoinLayers(HSCs)
+DefaultAssay(HSCs) <- "RNA"
+# Reclustering aHSCs
+HSCs <- FindVariableFeatures(HSCs)
+HSCs <- ScaleData(HSCs)
+HSCs <- RunPCA(HSCs)
+HSCs <- FindNeighbors(HSCs, dims = 1:10)
+HSCs <- FindClusters(HSCs, resolution = 0.5)
+HSCs <- RunUMAP(HSCs, dims = 1:10)
+# Assign groups
+HSCs$group <- ifelse(HSCs$orig.ident %in% c("CCl4_T_1", "CCl4_T_4", "CCl4_T_83"), "CCl4_T", "CCl4_V")
+
+#determine normalized gene expression for genes of interest in aHSCs (Figures 5D and 5G)_______________
+# List of genes of interest
+genes_of_interest <- c("Slc27a2","Acly","Acss2","Fasn","Acaca","Acacb","Scd1","Scd2","Acsl1","Acsl3",
+                       "Acsl4","Acsl5","Gpam","Gpat3","Dgat1","Dgat2","Hmgcr","Ldlr","Hmgcs2",
+                       "Fdft1","Sqle","Dhcr7","Mvk","Soat2","Fdps","Cyp4a14","Cyp4a10","Crat","Pex5")
+# Initialize a data frame to store results
+results <- data.frame(Gene = character(),
+                      n_CCl4_T = integer(),
+                      n_CCl4_V = integer(),
+                      avg_CCl4_T = numeric(),
+                      avg_CCl4_V = numeric(),
+                      stringsAsFactors = FALSE)
+# Loop over each gene of interest
+for (gene in genes_of_interest) {
+  # Check if the gene is in the dataset
+  if (gene %in% rownames(GetAssayData(HSCs, assay = "RNA", layer = "data"))) {
+    # Get the raw counts for the gene in aHSCs 
+    gene_counts <- GetAssayData(HSCs, assay = "RNA", layer = "data")[gene, ]
+    # Subset the counts by group
+    counts_CCl4_T <- gene_counts[HSCs$group == "CCl4_T"]
+    counts_CCl4_V <- gene_counts[HSCs$group == "CCl4_V"]
+    # Number of cells expressing the gene (non-zero count)
+    n_expressing_CCl4_T <- sum(counts_CCl4_T > 0)
+    n_expressing_CCl4_V <- sum(counts_CCl4_V > 0)
+    # Average expression including non-expressing cells (true mean)
+    avg_expression_CCl4_T <- mean(counts_CCl4_T)
+    avg_expression_CCl4_V <- mean(counts_CCl4_V)
+    # Add the results to the data frame
+    results <- rbind(results, data.frame(Gene = gene,
+                                         n_CCl4_T = n_expressing_CCl4_T,
+                                         n_CCl4_V = n_expressing_CCl4_V,
+                                         avg_CCl4_T = avg_expression_CCl4_T,
+                                         avg_CCl4_V = avg_expression_CCl4_V))
+  } else {
+    # If the gene is not found, display a message 
+    message(paste("Gene", gene, "not found in dataset"))
+  }
+}
+# View the summary results
+View(results)
+#Wilcoxon statistical testing
+# Initialize a data frame to store results
+wilcox_results <- data.frame(Gene = character(),
+                             p_value = numeric(),
+                             avg_expression_CCl4_V = numeric(),
+                             avg_expression_CCl4_T = numeric(),
+                             stringsAsFactors = FALSE)
+# Loop over each gene of interest
+for (gene in genes_of_interest) {
+  # Check if the gene is in the dataset
+  if (gene %in% rownames(GetAssayData(HSCs, assay = "RNA", layer = "data"))) {
+    # Get the raw counts for the gene in aHSCs
+    gene_counts <- GetAssayData(HSCs, assay = "RNA", layer = "data")[gene, ]
+    # Subset the counts by group
+    counts_CCl4_T <- gene_counts[HSCs$group == "CCl4_T"]
+    counts_CCl4_V <- gene_counts[HSCs$group == "CCl4_V"]
+    # Perform the Wilcoxon rank sum test
+    test_result <- wilcox.test(counts_CCl4_T, counts_CCl4_V)
+    # Calculate average expression for each group (including non-expressing cells)
+    avg_expression_CCl4_T <- mean(counts_CCl4_T)
+    avg_expression_CCl4_V <- mean(counts_CCl4_V)
+    # Append the results to the data frame
+    wilcox_results <- rbind(wilcox_results, data.frame(
+      Gene = gene,
+      p_value = test_result$p.value,
+      avg_expression_CCl4_T = avg_expression_CCl4_T,
+      avg_expression_CCl4_V = avg_expression_CCl4_V
+    ))
+  } else {
+    # If the gene is not found, display a message (optional)
+    message(paste("Gene", gene, "not found in dataset"))
+  }
+}
+# Adjust p-values for multiple testing (using Benjamini-Hochberg correction)
+wilcox_results$p_adj <- p.adjust(wilcox_results$p_value, method = "BH")
+# View the results
+View(wilcox_results)
+
+#determine normalized gene expression for genes of interest in hepatocytes (Figures 5C and 5H)_______________
+# Subset integrated object to include only hepatocyte clusters
+integrated_CCl4_noC$group <- ifelse(integrated_CCl4_noC$orig.ident %in% c("CCl4_T_1","CCl4_T_4","CCl4_T_83"), "CCl4_T", "CCl4_V")
+hepatocyte_clusters <- c(8, 6, 19, 18, 0, 2, 12, 17, 5, 20, 4, 7, 22)
+hepatocytes <- subset(integrated_CCl4_noC, seurat_clusters %in% hepatocyte_clusters)
+hepatocytes <- JoinLayers(hepatocytes)
+DefaultAssay(hepatocytes) <- "RNA"
+# Check the number of hepatocytes
+dim(hepatocytes)
+rm(integrated_CCl4_noC)
+# Reclustering hepatocytes 
+hepatocytes <- FindVariableFeatures(hepatocytes)
+hepatocytes <- ScaleData(hepatocytes)
+hepatocytes <- RunPCA(hepatocytes)
+hepatocytes <- FindNeighbors(hepatocytes, dims = 1:10)
+hepatocytes <- FindClusters(hepatocytes, resolution = 0.5)
+hepatocytes <- RunUMAP(hepatocytes, dims = 1:10)
+DefaultAssay(hepatocytes) <- "RNA"
+# List of genes of interest
+genes_of_interest <- c("Slc27a2","Acly","Acss2","Fasn","Acaca","Acacb","Scd1","Scd2","Acsl1","Acsl3",
+                       "Acsl4","Acsl5","Gpam","Gpat3","Dgat1","Dgat2","Hmgcr","Ldlr","Hmgcs2",
+                       "Fdft1","Sqle","Dhcr7","Mvk","Soat2","Fdps","Cyp4a14","Cyp4a10","Crat","Pex5")
+# Initialize a data frame to store results
+results <- data.frame(Gene = character(),
+                      n_CCl4_T = integer(),
+                      n_CCl4_V = integer(),
+                      avg_CCl4_T = numeric(),
+                      avg_CCl4_V = numeric(),
+                      stringsAsFactors = FALSE)
+# Loop over each gene of interest
+for (gene in genes_of_interest) {
+  # Check if the gene is in the dataset
+  if (gene %in% rownames(GetAssayData(hepatocytes, assay = "RNA", layer = "data"))) {
+    # Get the raw counts for the gene in hepatocytes
+    gene_counts <- GetAssayData(hepatocytes, assay = "RNA", layer = "data")[gene, ]
+    # Subset the counts by group
+    counts_CCl4_T <- gene_counts[hepatocytes$group == "CCl4_T"]
+    counts_CCl4_V <- gene_counts[hepatocytes$group == "CCl4_V"]
+    # Number of cells expressing the gene (non-zero count)
+    n_expressing_CCl4_T <- sum(counts_CCl4_T > 0)
+    n_expressing_CCl4_V <- sum(counts_CCl4_V > 0)
+    # Average expression including non-expressing cells (true mean)
+    avg_expression_CCl4_T <- mean(counts_CCl4_T)
+    avg_expression_CCl4_V <- mean(counts_CCl4_V)
+    # Add the results to the data frame
+    results <- rbind(results, data.frame(Gene = gene,
+                                         n_CCl4_T = n_expressing_CCl4_T,
+                                         n_CCl4_V = n_expressing_CCl4_V,
+                                         avg_CCl4_T = avg_expression_CCl4_T,
+                                         avg_CCl4_V = avg_expression_CCl4_V))
+  } else {
+    # If the gene is not found, display a message 
+    message(paste("Gene", gene, "not found in dataset"))
+  }
+}
+# View the summary results
+View(results)
+
+#Wilcoxon statistical testing
+# Initialize a data frame to store results
+wilcox_results <- data.frame(Gene = character(),
+                             p_value = numeric(),
+                             avg_expression_CCl4_V = numeric(),
+                             avg_expression_CCl4_T = numeric(),
+                             stringsAsFactors = FALSE)
+# Loop over each gene of interest
+for (gene in genes_of_interest) {
+  # Check if the gene is in the dataset
+  if (gene %in% rownames(GetAssayData(hepatocytes, assay = "RNA", layer = "data"))) {
+    # Get the raw counts for the gene in aHSCs using the correct layer argument
+    gene_counts <- GetAssayData(hepatocytes, assay = "RNA", layer = "data")[gene, ]
+    # Subset the counts by group
+    counts_CCl4_T <- gene_counts[hepatocytes$group == "CCl4_T"]
+    counts_CCl4_V <- gene_counts[hepatocytes$group == "CCl4_V"]
+    # Perform the Wilcoxon rank sum test
+    test_result <- wilcox.test(counts_CCl4_T, counts_CCl4_V)
+    # Calculate average expression for each group (including non-expressing cells)
+    avg_expression_CCl4_T <- mean(counts_CCl4_T)
+    avg_expression_CCl4_V <- mean(counts_CCl4_V)
+    
+    # Append the results to the data frame
+    wilcox_results <- rbind(wilcox_results, data.frame(
+      Gene = gene,
+      p_value = test_result$p.value,
+      avg_expression_CCl4_T = avg_expression_CCl4_T,
+      avg_expression_CCl4_V = avg_expression_CCl4_V
+    ))
+    
+  } else {
+    # If the gene is not found, display a message 
+    message(paste("Gene", gene, "not found in dataset"))
+  }
+}
+# Adjust p-values for multiple testing (Benjamini-Hochberg correction)
+wilcox_results$p_adj <- p.adjust(wilcox_results$p_value, method = "BH")
+# View the results
+View(wilcox_results)
+
+
+
+
+
+
+#SECTION 4. Figures 6B and 6C - human snRNA-seq inquiry_______________________________________________________
+#_____________________________________________________________________________________________________________
+
+#healthy condition_________________________________________
+#clustering and finding HSC cluster manually
+# Scale the integrated data
+integrated_data_healthy <- ScaleData(integrated_data_healthy)
+integrated_data_healthy <- RunPCA(integrated_data_healthy)
+# Find neighbors and clusters
+integrated_data_healthy <- FindNeighbors(integrated_data_healthy, dims = 1:25)
+integrated_data_healthy <- FindClusters(integrated_data_healthy, resolution = 1.0)
+integrated_data_healthy <- RunUMAP(integrated_data_healthy, dims = 1:25)
+DimPlot(integrated_data_healthy, reduction = "umap", label = TRUE, pt.size = 1)
+DefaultAssay(integrated_data_healthy) <- "RNA"
+#view features to find gene symbol to ensemblid translations
+View(features_healthy1)
+
+#DCN
+FeaturePlot(integrated_data_healthy, features = c("ENSG00000011465"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("DCN Expression")
+#HGF
+FeaturePlot(integrated_data_healthy, features = c("ENSG00000019991"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("HGF Expression")
+#RELN
+FeaturePlot(integrated_data_healthy, features = c("ENSG00000189056"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("RELN Expression")
+#PDGFRB
+FeaturePlot(integrated_data_healthy, features = c("ENSG00000113721"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("PDGFRB Expression")
+#COL3A1
+FeaturePlot(integrated_data_healthy, features = c("ENSG00000168542"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("COL3A1 Expression")
+#ACTA2
+FeaturePlot(integrated_data_healthy, features = c("ENSG00000107796"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("ACTA2 Expression")
+
+#label cluster 11 as HSCs
+integrated_data_healthy$custom_labels <- ifelse(Idents(integrated_data_healthy) == 11, "Hepatic Stellate Cells", "Other Cell Types")
+integrated_data_healthy$custom_labels <- factor(integrated_data_healthy$custom_labels, 
+                                                levels = c("Hepatic Stellate Cells", "Other Cell Types"))
+# Update the identity classes to use the new custom labels
+Idents(integrated_data_healthy) <- integrated_data_healthy$custom_labels
+
+#generate UMAP for figure 6B
+DimPlot(
+  integrated_data_healthy,
+  reduction = "umap",
+  label = FALSE,
+  raster = FALSE,  # <-- Important for vector output
+  pt.size = 1,
+  cols = c("Hepatic Stellate Cells" = "#E64B35",
+           "Other Cell Types" = "grey88")      # Softer background
+) +
+  labs(title = NULL, x = NULL, y = NULL) +
+  theme(
+    legend.position = "right",
+    #axis.ticks = element_line(color = "black"),
+    #axis.text = element_text(size = 15),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(5, 5, 5, 5),
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank()
+  )
+
+# Get the total number of cells and HSCs
+total_cells <- table(integrated_data_healthy$orig.ident)
+HSC_by_replicate <- table(
+  integrated_data_healthy$orig.ident[integrated_data_healthy$custom_labels %in% "Hepatic Stellate Cells"]
+)
+
+#calculate SLC27A2 expression in healthy HSCs for figure 6C________
+hsc_cells_healthy <- WhichCells(integrated_data_healthy, idents = "Hepatic Stellate Cells")
+mean_expr_hscs_healthy <- mean(FetchData(integrated_data_healthy, vars = "ENSG00000140284")[hsc_cells_healthy, "ENSG00000140284"])
+
+
+
+#nafld condition_________________________________________
+#clustering and finding HSC cluster manually
+# Scale the integrated data
+integrated_data_nafld <- ScaleData(integrated_data_nafld)
+integrated_data_nafld <- RunPCA(integrated_data_nafld)
+# Find neighbors and clusters
+integrated_data_nafld <- FindNeighbors(integrated_data_nafld, dims = 1:25)
+integrated_data_nafld <- FindClusters(integrated_data_nafld, resolution = 1.0)
+integrated_data_nafld <- RunUMAP(integrated_data_nafld, dims = 1:25)
+DimPlot(integrated_data_nafld, reduction = "umap", label = TRUE, pt.size = 1)
+DefaultAssay(integrated_data_nafld) <- "RNA"
+#DCN
+FeaturePlot(integrated_data_nafld, features = c("ENSG00000011465"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("DCN Expression")
+#HGF
+FeaturePlot(integrated_data_nafld, features = c("ENSG00000019991"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("HGF Expression")
+#RELN
+FeaturePlot(integrated_data_nafld, features = c("ENSG00000189056"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("RELN Expression")
+#PDGFRB
+FeaturePlot(integrated_data_nafld, features = c("ENSG00000113721"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("PDGFRB Expression")
+#COL3A1
+FeaturePlot(integrated_data_nafld, features = c("ENSG00000168542"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("COL3A1 Expression")
+#ACTA2
+FeaturePlot(integrated_data_nafld, features = c("ENSG00000107796"), cols = c("lightgrey", "blue"),
+            pt.size = 1) + ggtitle("ACTA2 Expression")
+#label cluster 15 as HSCs
+integrated_data_nafld$custom_labels <- ifelse(Idents(integrated_data_nafld) == 15, "Hepatic Stellate Cells", "Other Cell Types")
+integrated_data_nafld$custom_labels <- factor(integrated_data_nafld$custom_labels, 
+                                              levels = c("Hepatic Stellate Cells", "Other Cell Types"))
+Idents(integrated_data_nafld) <- integrated_data_nafld$custom_labels
+
+#generate UMAP for figure 6B
+DimPlot(
+  integrated_data_nafld,
+  reduction = "umap",
+  label = FALSE,
+  raster = FALSE,  # <-- Important for vector output
+  pt.size = 1.5,
+  cols = c("Hepatic Stellate Cells" = "#E64B35",
+           "Other Cell Types" = "grey88")      # Softer background
+) +
+  labs(title = NULL, x = NULL, y = NULL) +
+  theme(
+    legend.position = "none",
+    #axis.ticks = element_line(color = "black"),
+    #axis.text = element_text(size = 15),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(5, 5, 5, 5),
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text = element_blank()
+  )
+
+# Get the total number of cells and HSCs
+total_cells <- table(integrated_data_nafld$orig.ident)
+HSC_by_replicate <- table(
+  integrated_data_nafld$orig.ident[integrated_data_nafld$custom_labels %in% "Hepatic Stellate Cells"]
+)
+
+#calculate SLC27A2 expression in nafld HSCs for figure 6C________
+hsc_cells_nafld <- WhichCells(integrated_data_nafld, idents = "Hepatic Stellate Cells")
+mean_expr_hscs_nafld <- mean(FetchData(integrated_data_nafld, vars = "ENSG00000140284")[hsc_cells_nafld, "ENSG00000140284"])
+
